@@ -10,6 +10,7 @@ library(caret)
 library(ipred)
 library(e1071)
 library(mice)
+library(ggplot2)
 
 #Identify and combine train and test data sets for data cleaning & feature engineering#
 test <- read.table("test.csv",sep= ",",header = T,stringsAsFactors = T)
@@ -27,13 +28,17 @@ subset(full, is.na(Fare))
 # Replace missing fare value with median fare for class/embarkment
 full$Fare[1044] <- median(full[full$Pclass == '3' & full$Embarked == 'S', ]$Fare, na.rm = TRUE)
 
+#Impute some 
 # Set a random seed
-set.seed(129)sss
+set.seed(129)
 
 # Perform mice imputation, excluding certain less-than-useful variables:
 mice_mod <- mice(full[, !names(full) %in% c('PassengerId','Name','Ticket','Cabin','Family','Surname','Survived')], method='rf') 
 mice_output <- complete(mice_mod)
 full$Age <- mice_output$Age
+
+train <- full[ which(full$source=='Test'),]
+test <- full[ which(full$source=='Train'),]
 
 train_transformed <- train %>%
   mutate(Sex_male = ifelse(Sex == "male",1,0)) %>% #male 1 female 0
@@ -81,6 +86,12 @@ train_transformed[c(62, 830), 'Fare']
 train_transformed$Embarked[c(62, 830)] <- 'C'
 
 str(train_transformed)
+
+# Use ggplot2 to visualize the relationship between family size & survival
+ggplot(train_transformed[1:891,], aes(x = Family_Size, fill = factor(Survived))) +
+  geom_bar(stat='count', position='dodge') +
+  scale_x_continuous(breaks=c(1:11)) +
+  labs(x = 'Family Size')
 
 #Converting the dependent variable back to categorical
 train_transformed$Survived<-as.factor(train_transformed$Survived)

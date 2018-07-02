@@ -11,6 +11,7 @@ library(ipred)
 library(e1071)
 library(mice)
 library(ggplot2)
+library(klaR)
 
 #Identify and combine train and test data sets for data cleaning & feature engineering#
 test <- read.table("test.csv",sep= ",",header = T,stringsAsFactors = T)
@@ -30,17 +31,24 @@ full$Fare[1044] <- median(full[full$Pclass == '3' & full$Embarked == 'S', ]$Fare
 
 #Impute some 
 # Set a random seed
-set.seed(129)
+set.seed(666)
 
 # Perform mice imputation, excluding certain less-than-useful variables:
 mice_mod <- mice(full[, !names(full) %in% c('PassengerId','Name','Ticket','Cabin','Family','Surname','Survived')], method='rf') 
 mice_output <- complete(mice_mod)
 full$Age <- mice_output$Age
 
-train <- full[ which(full$source=='Test'),]
-test <- full[ which(full$source=='Train'),]
+#find NA's
+train_missings <- full_transformed[rowSums(is.na(full_transformed)) > 0,]
 
-train_transformed <- train %>%
+full[c(62, 830), 'Embarked']
+full[c(62, 830), 'Fare']
+# Since their fare was $80 for 1st class, they most likely embarked from 'C'
+full$Embarked[c(62, 830)] <- 'C'
+
+str(full_transformed)
+
+full_transformed <- full %>%
   mutate(Sex_male = ifelse(Sex == "male",1,0)) %>% #male 1 female 0
   mutate(Sex_female = ifelse(Sex == "female",1,0)) %>%
   mutate(Title = gsub('(.*, )|(\\..*)', '', Name)) %>%
@@ -68,57 +76,67 @@ train_transformed <- train %>%
   # mutate(Age = scale(Age)) %>%
   mutate(Family_Size = SibSp+Parch+1) %>%
   mutate(FsizeD_sing = ifelse(Family_Size == 1,1,0)) %>%
-  mutate(FsizeD_sm = ifelse((Family_Size < 5 & Family_Size )>1,1,0)) %>%
+  mutate(FsizeD_sm = ifelse((Family_Size < 5 & Family_Size >1),1,0)) %>%
   mutate(FsizeD_lrg = ifelse(Family_Size > 4,1,0)) %>%
   mutate(is_Alone = ifelse(Family_Size>1,0,1)) %>%
   mutate(Age_Fare = Fare*Age) %>%
   mutate(Child = ifelse(Age<18,1,0)) %>%
   mutate(Mother = ifelse((Sex == "female" & Age > 18 & Parch > 0 & Title != "Miss"),1,0))
-# select(c("Survived","Age","SibSp","Parch","Fare","Sex_male","Sex_female","Embarked_c","Embarked_q",
-#          "Embarked_s","Pclass_1","Pclass_2","Pclass_3","Family_Size","is_Alone","Age_Fare"))
+select(c("Survived","Age","SibSp","Parch","Fare","Sex_male","Sex_female","Embarked_c","Embarked_q",
+         "Embarked_s","Pclass_1","Pclass_2","Pclass_3","Family_Size","is_Alone","Age_Fare"))
 
-#find NA's
-train_missings <- train_transformed[rowSums(is.na(train_transformed)) > 0,]
-
-train_transformed[c(62, 830), 'Embarked']
-train_transformed[c(62, 830), 'Fare']
-# Since their fare was $80 for 1st class, they most likely embarked from 'C'
-train_transformed$Embarked[c(62, 830)] <- 'C'
-
-str(train_transformed)
 
 # Use ggplot2 to visualize the relationship between family size & survival
-ggplot(train_transformed[1:891,], aes(x = Family_Size, fill = factor(Survived))) +
+ggplot(full_transformed[1:891,], aes(x = Family_Size, fill = factor(Survived))) +
   geom_bar(stat='count', position='dodge') +
   scale_x_continuous(breaks=c(1:11)) +
   labs(x = 'Family Size')
 
 #Converting the dependent variable back to categorical
-train_transformed$Survived<-as.factor(train_transformed$Survived)
-levels(train_transformed$Survived) <- c("Died", "Survived")
+full_transformed$Survived<-as.factor(full_transformed$Survived)
+levels(full_transformed$Survived) <- c("Died", "Survived")
+
+# #Drop unhelpful variables#
+# full_trans_shortvars <- full_transformed[c("Survived","Age","SibSp","Parch","Fare","source","Sex_male","Sex_female","Embarked_c","Embarked_q",
+#                                            "Embarked_s","Pclass_1","Pclass_2","Pclass_3","Family_Size","FsizeD_sing","FsizeD_sm","FsizeD_lrg","is_Alone",
+#                                            "Age_Fare","Child","Mother")]
+
+#Split Test and Training Data
+train <- full_trans_shortvars[ which(full_trans_shortvars$source=='Train'),]
+test <- full_trans_shortvars[ which(full_trans_shortvars$source=='Test'),]
+
+#drop source variable#
+train <- train[c(-6)]
+test <- test[c(-6)]
+
+str(train)
+str(test)
 #Spliting training set into two parts based on outcome: 75% and 25%
-index <- createDataPartition(train_transformed$Survived, p=0.75, list=FALSE)
-trainSet <- train_transformed[ index,]
-cvSet <- train_transformed[-index,]
+#Creates a cross validation set#
+index <- createDataPartition(train$Survived, p=0.75, list=FALSE)
+trainSet <- train[ index,]
+cvSet <- train[-index,]
 
 #Feature selection using rfe in caret
 control <- rfeControl(functions = rfFuncs,
                       method = "repeatedcv",
                       repeats = 3,
                       verbose = FALSE)
+
 outcomeName<-'Survived'
 predictors<-names(trainSet)[!names(trainSet) %in% outcomeName]
-# Loan_Pred_Profile <- rfe(trainSet[,predictors], trainSet[,outcomeName],
-#                          rfeControl = control)
-# #Taking only the top 5 predictors
-# predictors<-c("Fare", "Sex_female", "Age", "Sex_male", "Pclass_3")
+Best_Pred_Profile <- rfe(trainSet[,predictors], trainSet[,outcomeName],
+                         rfeControl = control)
+# The top 5 variables (out of 8):
+#   Sex_male, Sex_female, Pclass_3, Fare, Age
 
-fitControl <- trainControl(
-  method = "repeatedcv",
-  number = 10,
-  repeats = 10,
-  search = "random",
-  classProbs = TRUE)
+fitControl <- trainControl(method = "repeatedcv",
+                           number = 10,
+                           repeats = 3,
+                           classProbs = TRUE,
+                           # summaryFunction = twoClassSummary,
+                           search = "random")
+
 
 model_gbm<-train(trainSet[,predictors],trainSet[,outcomeName],method='gbm',trControl = fitControl,verbose=F)
 model_rf<-train(trainSet[,predictors],trainSet[,outcomeName],method='rf',trControl = fitControl,verbose=F)
@@ -207,7 +225,8 @@ cvSet$prob_knn<-predict.train(object=model_knn,cvSet[,predictors],type="prob")
 cvSet$pred_avg<-(cvSet$prob_gbm$Survived+cvSet$prob_rf$Survived+cvSet$prob_nnet$Survived+cvSet$prob_glm$Survived+cvSet$prob_xgbtree$Survived+
                    cvSet$prob_rda$Survived+cvSet$prob_adabag$Survived+cvSet$prob_treebag$Survived+cvSet$prob_knn$Survived)/9
 #Splitting into binary classes at 0.5
-cvSet$pred_avg<-as.factor(ifelse(cvSet$pred_avg>0.5,'1','0'))
+cvSet$pred_avg<-as.factor(ifelse(cvSet$pred_avg>0.5,'Survived','Died'))
+
 
 #The majority vote
 cvSet$pred_majority<-as.factor(ifelse(as.numeric((cvSet$pred_gbm=="Survived") + (cvSet$pred_rf=="Survived") +
